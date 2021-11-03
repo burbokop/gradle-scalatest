@@ -1,20 +1,32 @@
 package com.github.maiflai
 
+import com.github.maiflai.utils.Handle
 import groovy.transform.Immutable
 import org.gradle.api.Action
 import org.gradle.api.GradleException
+import org.gradle.api.internal.file.DefaultFileLookup
 import org.gradle.api.logging.configuration.ConsoleOutput
 import org.gradle.api.reporting.DirectoryReport
 import org.gradle.api.tasks.testing.Test
 import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 import org.gradle.api.tasks.testing.logging.TestLogEvent
 import org.gradle.api.tasks.util.PatternSet
+import org.gradle.api.tasks.util.internal.PatternSets
+import org.gradle.api.tasks.util.internal.PatternSpecFactory
 import org.gradle.internal.UncheckedException
+import org.gradle.internal.nativeintegration.filesystem.FileSystem
 import org.gradle.process.internal.DefaultExecActionFactory
 import org.gradle.process.internal.JavaExecAction
 
+import java.nio.file.Files
+import java.nio.file.Paths
+import java.nio.file.StandardOpenOption
+import java.nio.file.spi.FileSystemProvider
+import java.util.logging.FileHandler
+import java.util.logging.Logger
+import java.util.logging.SimpleFormatter
 import java.util.regex.Pattern
-
+import org.gradle.api.internal.file.FileResolver
 /**
  * <p>Designed to replace the normal Test Action with a new JavaExecAction
  * launching the scalatest Runner.</p>
@@ -24,15 +36,20 @@ import java.util.regex.Pattern
 @Immutable
 class ScalaTestAction implements Action<Test> {
 
+    BackwardsCompatibleJavaExecActionFactory factory;
+
     static String TAGS = 'tags'
     static String SUITES = '_suites'
     static String CONFIG = '_config'
     static String REPORTERS = '_reporters'
+    static String RUNNER = '_runner'
+
+    static String DEFAULT_RUNNER = 'org.scalatest.tools.Runner'
 
     @Override
     void execute(Test t) {
-        def result = makeAction(t).execute()
-        if (result.exitValue != 0){
+        def result = makeAction(t, factory).execute()
+        if (result.exitValue != 0) {
             handleTestFailures(t)
         }
     }
@@ -64,16 +81,24 @@ class ScalaTestAction implements Action<Test> {
         }
     }
 
+    static String getRunner(Test t) {
+        def handle = t.extensions.findByName(RUNNER) as Handle<Optional<String>>;
+        String runner = handle?.get()?.orElse(DEFAULT_RUNNER)
+        if(runner.isEmpty()) runner = DEFAULT_RUNNER
+        return runner
+    }
 
-    static JavaExecAction makeAction(Test t) {
-        JavaExecAction javaExecHandleBuilder = DefaultExecActionFactory.root(t.project.gradle.gradleUserHomeDir).newJavaExecAction()
-        t.copyTo(javaExecHandleBuilder)
-        javaExecHandleBuilder.setMain('org.scalatest.tools.Runner')
-        javaExecHandleBuilder.setClasspath(t.getClasspath())
-        javaExecHandleBuilder.setJvmArgs(t.getAllJvmArgs())
-        javaExecHandleBuilder.setArgs(getArgs(t))
-        javaExecHandleBuilder.setIgnoreExitValue(true)
-        return javaExecHandleBuilder
+    static JavaExecAction makeAction(Test t, BackwardsCompatibleJavaExecActionFactory factory) {
+        FileResolver fileResolver = t.getServices().get(FileResolver.class)
+        JavaExecAction action = factory.create(fileResolver)
+        t.copyTo(action)
+
+        action.setMain(getRunner(t))
+        action.setClasspath(t.getClasspath())
+        action.setJvmArgs(t.getAllJvmArgs())
+        action.setArgs(getArgs(t))
+        action.setIgnoreExitValue(true)
+        return action
     }
 
     static Set<TestLogEvent> other(Set<TestLogEvent> required) {
@@ -168,9 +193,9 @@ class ScalaTestAction implements Action<Test> {
         }
         if (t.reports.getHtml().isEnabled()){
             args.add('-h')
-             def dest = t.reports.getHtml().getDestination()
-             dest.mkdirs()
-             args.add(dest.getAbsolutePath())
+            def dest = t.reports.getHtml().getDestination()
+            dest.mkdirs()
+            args.add(dest.getAbsolutePath())
         }
         def tags = t.extensions.findByName(TAGS) as PatternSet
         if (tags) {
@@ -197,6 +222,11 @@ class ScalaTestAction implements Action<Test> {
             args.add('-C')
             args.add(it)
         }
+        //def runner = t.extensions.findByName(RUNNER) as String
+        //if (!runner?.isEmpty()) {
+        //    args.add('--runner')
+        //    args.add(runner)
+        //}
         assert args.every { it.length() > 0}
         return args
     }

@@ -1,5 +1,6 @@
 package com.github.maiflai
 
+import com.github.maiflai.utils.Handle
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.plugins.JavaPlugin
@@ -8,6 +9,7 @@ import org.gradle.api.tasks.testing.Test
 import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 import org.gradle.api.tasks.testing.logging.TestLogEvent
 import org.gradle.api.tasks.util.PatternSet
+import com.github.maiflai.utils.Handle
 
 /**
  * Applies the Java & Scala Plugins
@@ -23,6 +25,7 @@ class ScalaTestPlugin implements Plugin<Project> {
     @Override
     void apply(Project t) {
         if (!t.plugins.hasPlugin(ScalaTestPlugin)) {
+            factory = new BackwardsCompatibleJavaExecActionFactory(t.gradle.gradleVersion)
             t.plugins.apply(JavaPlugin)
             t.plugins.apply(ScalaPlugin)
             switch (getMode(t)) {
@@ -54,12 +57,14 @@ class ScalaTestPlugin implements Plugin<Project> {
         }
     }
 
+    static BackwardsCompatibleJavaExecActionFactory factory
+
     static void configure(Test test) {
         test.maxParallelForks = Runtime.runtime.availableProcessors()
         //noinspection GroovyAssignabilityCheck
         test.actions = [
                 new JacocoTestAction(),
-                new ScalaTestAction()
+                new ScalaTestAction(factory)
         ]
         test.testLogging.exceptionFormat = TestExceptionFormat.SHORT
         test.extensions.add(ScalaTestAction.TAGS, new PatternSet())
@@ -75,6 +80,10 @@ class ScalaTestPlugin implements Plugin<Project> {
         test.extensions.add(ScalaTestAction.REPORTERS, reporters)
         test.extensions.add("reporter", { String name -> reporters.add(name) })
         test.extensions.add("reporters", { String... name -> reporters.addAll(name) })
+
+        Handle<Optional<String>> runner = new Handle(Optional.empty())
+        test.extensions.add(ScalaTestAction.RUNNER, runner)
+        test.extensions.add("runner", { String name -> runner.put(new Optional<String>(name)) })
         test.testLogging.events = TestLogEvent.values() as Set
     }
 
